@@ -1,0 +1,300 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+---
+title: "ST3131 Project"
+author: ""
+date: "10 April 2018"
+output: word_document
+---
+```{r,echo = FALSE,warning=FALSE,results='hide'}
+library(ggplot2)
+library(RColorBrewer)
+library(MASS)
+library(car)
+library(alr3)
+library(tseries)
+library(perturb)
+```
+
+```{r,echo = FALSE ,warning=FALSE,results='hide'}
+setwd("C:\\Users\\Shane\\Documents\\NUS Documents\\NUS Year 4\\ST3131\\3131Proj\\3131Project")
+getwd()
+
+df<- read.csv("weatherHistory.csv", header=TRUE)
+```
+
+```{r,echo = TRUE,warning=FALSE}
+# start diagnostics
+str(df)
+
+# convert the year to a number (as we expect some sequential relationship)
+# we see later that this is the case, as autocorrelation in temperature is expected
+# also more reasonable to have numbers rather than many independent factors
+df$Formatted.Date <- as.numeric(df$Formatted.Date)
+
+# select only numerical variables
+df_diag <- df[,c(1,4:11)]
+
+str(df_diag)
+
+# print correlation matrix first
+cor(df_diag)
+```
+
+# we observe some overly correlated values. These indicate that these parameters may need to be removed from the
+# model to prevent multicollinearity (and emphasize parsimony)
+# observe also that loud_cover appears to be a useless variable, as it does not vary with respect to any other variables
+
+```{r,echo = TRUE,warning=FALSE}
+summary(df$Loud_Cover)
+```
+
+# indeed, we confirm that this is the case
+# further, it does not make sense to use apparent temperature to predict temperature. First, this is redundant - we
+# expect these variables to be basically the same thing. Using a variable to predict itself is an exercise in 
+# redundancy. Secondly, the causality of the relationship between these 2 variables is reversed. We expect that there 
+# is some true temperature, and due to some modifiers such as wind speed we arrive at an apparent temperature. The reverse
+# relationship is not true. Finally, for the purposes of this exercise, this variable removes the need for much analysis 
+# in the regression model. Hence, we remove apparent temperature as well.
+# we can also identify some variables that seem to be not useful. Date, Wind speed, wind bearing, and pressure stand out.
+# while it would be hasty to remove these prematurely, it does provide a sense of what variables may not be important.
+
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+# remove variables mentioned in diagnostics
+df_2 <- df[,c(1:4, 6:9, 11)]
+```
+
+# also, the daily summary is a text description with over 200 levels. While this may be useful, we hypothesize that
+# much of the relevant information is capture by the summary variable already. Removing this variable makes the
+# subsequent regression much simpler
+
+## perform basic linear regression
+```{r,echo = TRUE,warning=FALSE}
+fit1 <- lm(Temperature ~ ., data = df_2)
+
+summary(fit1)
+```
+
+## perform diagnostics
+
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+plot(fit1)
+```
+
+# we can see a clear pattern in the residuals, and the normal plot seems a little strange. 
+# we suspect that this pattern is caused by the different levels in summary
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+summary(df$Summary)
+```
+
+# observe that not all categories in Summary appear equally. This can cause overfitting to specific factor levels, 
+# and probably is the reason why there is a sharp gradient in the residuals.
+# we can attempt to pool the categories to address this. 
+# we remove the summary and see how the performance of the model changes
+
+##Linear regression
+```{r,echo = TRUE,warning=FALSE}
+fit2 <- lm(Temperature ~ . - Summary, data = df_2)
+summary(fit2)
+```
+
+# we observe that there is negligible difference in R squared for the removal of (essentially) dozens of variables.
+# we can also perform the partial f test to verify this
+```{r,echo = TRUE,warning=FALSE}
+anova(fit1, fit2)
+```
+
+# appears that summary was significant
+
+## perform diagnostics
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+plot(fit2)
+```
+
+# we observe that the sharp gradient still exists. Perhaps this is due to the fact that there are 2 main groups of
+# observations - Rainy or Snowy.
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+plot(fit2$fitted.values, fit2$residuals, col = df_2$Precip_Type)
+```
+
+#indeed, this is the case! this implies that it is not sufficient to have the two types having different intercept only
+# we therefore try allowing a different gradient (adding the interaction terms)
+# we can add back summary, as it was not the cause of the effect, and it was significant.
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+fit3 <- lm(Temperature ~ . + Precip_Type:Formatted.Date + Precip_Type:Humidity + 
+             Precip_Type:Wind_Speed + Precip_Type:Wind_Bearing + Precip_Type:Visibility + Precip_Type:Pressure, data = df_2)
+
+summary(fit3)
+
+plot(fit3$fitted.values, fit3$residuals, col = df_2$Precip_Type)
+```
+
+# next, it appears that variance of the residuals needs to be controlled to get a good residual plot
+# this is because there appears to be a bound causing the sharp cut off
+# realize that the difference between rain and snow is that one is above water melting point.
+# this results in a cut off point of 0 degrees.
+# we can verify if this is the case by plotting the actual temperature against the fitted temperature
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+plot(fit3$fitted.values, df_2$Temperature, col = df_2$Precip_Type)
+```
+
+# if this is the case, then we are limited in what we can do. Conceptually, if we were to seperate the days into
+# rainy and snowy, the distribution of the two groups temperatures would not be normal, as they would both be
+# truncated at 0.
+
+# try a transform to fix the variance increase and long right tail of normal plot
+# we are  limited in our choice of transformations as the values of temperatures passes through 0
+# furthermore, observe that the variance seems to increase the further away the fitted values are from 0
+# hence, it would make sense to try to reduce the variation at the far ends. this implies a lower power transformation
+# hence, we try a sign preserving transform such as the cube root
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+test <- (df_2$Temperature)^(1/3)
+
+fit5 <- lm(test ~ . + Precip_Type:Formatted.Date + Precip_Type:Humidity + 
+             Precip_Type:Wind_Speed + Precip_Type:Wind_Bearing + Precip_Type:Visibility + Precip_Type:Pressure, data = df_2)
+
+# summary(fit5)
+
+plot(fit5$fitted.values, fit5$residuals, col = df_2$Precip_Type)
+```
+
+
+# there is still a clear pattern in the residuals. Furthermore, this transform seem to result in worse fits
+
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+# in order to prevent the issue of negative values, we add a constant to the temperature
+df_3 <- df_2
+df_3$Temperature <- df_3$Temperature + 30
+
+# we then get the model established in the previous section to try the box cox transforms
+fit6 <- lm(Temperature ~ Formatted.Date + Summary + Precip_Type + Humidity + 
+             Wind_Speed + Wind_Bearing + Visibility + Pressure + Precip_Type:Humidity + 
+             Precip_Type:Wind_Speed + Precip_Type:Wind_Bearing + Precip_Type:Visibility + 
+             Precip_Type:Pressure, data = df_3)
+
+# we perform the box cox transform to get the best power transform
+boxcox <- boxcox(fit6, lambda = seq(-2,5,0.01))
+
+boxcox$x[boxcox$y == max(boxcox$y)]
+# it appears that 1/4 may be the best transform
+```
+
+
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+# use boxcox identified transform
+fit7 <- lm(Temperature^(1/4) ~ Formatted.Date + Summary + Precip_Type + Humidity + 
+             Wind_Speed + Wind_Bearing + Visibility + Pressure + Precip_Type:Humidity + 
+             Precip_Type:Wind_Speed + Precip_Type:Wind_Bearing + Precip_Type:Visibility + 
+             Precip_Type:Pressure, data = df_3)
+
+summary(fit7)
+
+plot(fit7$fitted.values, fit7$residuals, col = df_3$Precip_Type)
+```
+
+### we observe that the residual plot is still not good
+
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+# we perform other test on the residuals
+runs.test(factor(sign(fit7$residuals)), alternative = 'two.sided')
+
+durbinWatsonTest(fit7)
+```
+
+
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+# we see that there is evidence of autocorrelation
+# hence, we try the base model of using a lag 1 temperature
+# we still use the modified temperature as it allows all positive
+# we also remove the date as we assume that the lag 1 incorporates this information
+
+temp_lead <- df_3$Temperature[-1]
+
+# drop the last row in the data frame (we lose one row when creating a lag 1 variable)
+df_4 <- df_3[-nrow(df_3),] 
+df_4$temp_lead <- temp_lead
+
+# baseline lag1 model
+fit8 <- lm(temp_lead ~ Temperature , data = df_4)
+
+summary(fit8)
+plot(fit8)
+
+ks.test(fit8$residuals, "pnorm", mean(fit8$residuals), sd(fit8$residuals))
+
+# add variables from earlier parts
+fit9 <- lm(temp_lead ~ Temperature + Summary + Precip_Type + Humidity + 
+             Wind_Speed + Wind_Bearing + Visibility + Pressure, data = df_4)
+
+summary(fit9)
+plot(fit9)
+
+fit10 <- stepAIC(fit9, direction = 'both')
+
+# same model as fit 9
+# we have found satisfactory performance in model fit
+# residual plot appears good as well
+# although qq plot implies that we have heavier tails than would be expected from a normal distribution
+# so the underlying distribution is likely not normal
+
+# test multicollinearity (roughly, due to presence of dummies)
+vif(fit9)
+1/vif(fit9)
+```
+
+
+# finally, we perform a lack of fit test
+# however, combination of predictors too large to calculate (unable to test)
+```{r,echo = TRUE,warning=FALSE,results='hide'}
+# anova(fit3,SSPE)
+#lackfit <- pureErrorAnova(fit3)
+
+#df_factor <- df_2
+
+#cols <- colnames(df_factor)
+#df_factor[cols] <- lapply(df_factor[cols], factor)
+
+
+#str(df_factor)
+
+#best_model <- lm(test ~ Formatted.Date + Summary + Precip_Type + Humidity + 
+#                   Wind_Speed + Wind_Bearing + Visibility + Pressure + Precip_Type:Humidity + 
+#                   Precip_Type:Wind_Speed + Precip_Type:Wind_Bearing + Precip_Type:Visibility + 
+#                   Precip_Type:Pressure, data = df_factor)
+```
+
+##Desciptive Statistics
+```{r echo=FALSE}
+attach(df)
+#Variables used in determining weather
+names(df) 
+
+#Summary of all the variables
+summary(Humidity)
+summary(Temperature)
+summary(Pressure)
+summary(Wind_Speed)
+```
+
+## Summary of all the variables
+```{r echo=FALSE}
+
+par(mfrow=c(2,2))
+
+boxplot(Humidity, main="Summary for Humidity")
+boxplot(Temperature, main="Summary for Temperature")
+boxplot(Pressure, main="Summary for Pressure")
+boxplot(Wind_Speed, main="Summary for wind speed")
+```
+
+## Frequency table of weather type
+```{r echo=FALSE, warning=FALSE}
+counts <- table(Summary)
+l<- as.factor(names(table(Summary)))
+barplot(counts, main="Weather frequency", xlab="Frequency", horiz=TRUE, names.arg= l, las =2, cex.names=0.3, col= brewer.pal(n=27, name="Set3"))
+
+```
+
